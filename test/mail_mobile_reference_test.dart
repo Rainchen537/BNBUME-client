@@ -183,33 +183,26 @@ void main() {
     });
   }
 
-  testWidgets(
-    'left swipe marks the actual message and opening another row closes the first actions',
-    (tester) async {
-      final fixture = await launch(tester);
-      await tester.drag(
-        find.byType(MailMessageRow).first,
-        const Offset(-220, 0),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('标为已读'), findsOneWidget);
-      await capture(tester, 'swipe-dark');
-      await tester.tap(find.text('标为已读'));
-      await tester.pumpAndSettle();
-      expect(
-        fixture.service.messages
-            .firstWhere(
-              (message) =>
-                  message.uid == 1 && message.folder == MailFolder.inbox,
-            )
-            .isSeen,
-        isTrue,
-      );
-      expect(fixture.service.mutations, contains('seen:true'));
-      await tester.pumpWidget(const SizedBox.shrink());
-      debugDefaultTargetPlatformOverride = null;
-    },
-  );
+  testWidgets('right swipe marks the actual message read', (tester) async {
+    final fixture = await launch(tester);
+    await tester.drag(find.byType(MailMessageRow).first, const Offset(220, 0));
+    await tester.pumpAndSettle();
+    expect(find.text('标为已读'), findsOneWidget);
+    await capture(tester, 'swipe-dark');
+    await tester.tap(find.text('标为已读'));
+    await tester.pumpAndSettle();
+    expect(
+      fixture.service.messages
+          .firstWhere(
+            (message) => message.uid == 1 && message.folder == MailFolder.inbox,
+          )
+          .isSeen,
+      isTrue,
+    );
+    expect(fixture.service.mutations, contains('seen:true'));
+    await tester.pumpWidget(const SizedBox.shrink());
+    debugDefaultTargetPlatformOverride = null;
+  });
 
   testWidgets(
     'folder menu omits retired topics and sent has disabled unread filter',
@@ -354,12 +347,15 @@ void main() {
       final before = fixture.radar.items.firstWhere(
         (item) => item.toSummary().identityKey == row.message.identityKey,
       );
-      expect(row.swipeActions.map((action) => action.label), contains('标记完成'));
       expect(
-        row.swipeActions.map((action) => action.label),
+        row.rightSwipeActions.map((action) => action.label),
+        contains('标记完成'),
+      );
+      expect(
+        row.rightSwipeActions.map((action) => action.label),
         isNot(contains('无需雷达')),
       );
-      row.swipeActions
+      row.rightSwipeActions
           .singleWhere((action) => action.label == '标记完成')
           .onPressed!();
       await tester.pumpAndSettle();
@@ -412,7 +408,7 @@ void main() {
     'wide compose stays in reading pane and preserves mailbox across resize',
     (tester) async {
       await launch(tester, size: const Size(1440, 1000), light: true);
-      await tester.tap(find.text('新建邮件'));
+      await tester.tap(find.byKey(const ValueKey('mail-desktop-compose')));
       await tester.pumpAndSettle();
       final list = find.byKey(const ValueKey('mail-desktop-message-list'));
       final editor = find.byKey(const ValueKey('compose-desktop-workspace'));
