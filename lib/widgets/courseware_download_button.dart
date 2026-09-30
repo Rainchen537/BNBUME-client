@@ -396,6 +396,15 @@ class _CoursewareDownloadModalState extends State<_CoursewareDownloadModal> {
   Widget build(BuildContext context) {
     final plan = _plan;
     final result = _result;
+    final filesByExtension = <String, Set<String>>{};
+    for (final file in plan?.files ?? <CourseArchiveEntry>[]) {
+      final name = file.fileName.trim();
+      final dot = name.lastIndexOf('.');
+      if (dot <= 0 || dot == name.length - 1) continue;
+      final extension = name.substring(dot + 1).toLowerCase();
+      filesByExtension.putIfAbsent(extension, () => <String>{}).add(file.url);
+    }
+    final extensions = filesByExtension.keys.toList()..sort();
     final desktop =
         !kIsWeb &&
         const {
@@ -515,7 +524,31 @@ class _CoursewareDownloadModalState extends State<_CoursewareDownloadModal> {
                         }
                       }),
                     ),
-                    const Expanded(child: BnbuText('全选')),
+                    Expanded(
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          const BnbuText('全选'),
+                          for (final extension in extensions)
+                            FilterChip(
+                              label: Text(extension.toUpperCase()),
+                              selected: filesByExtension[extension]!.every(
+                                _selected.contains,
+                              ),
+                              onSelected: (selected) => setState(() {
+                                final urls = filesByExtension[extension]!;
+                                if (selected) {
+                                  _selected.addAll(urls);
+                                } else {
+                                  _selected.removeAll(urls);
+                                }
+                              }),
+                            ),
+                        ],
+                      ),
+                    ),
                     Text('${_selected.length} / ${plan.files.length}'),
                   ],
                 ),

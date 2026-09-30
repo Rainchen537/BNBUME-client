@@ -148,6 +148,77 @@ void main() {
     },
   );
 
+  testWidgets(
+    'extension selection preserves other types and downloads selection',
+    (tester) async {
+      final mixedFiles = [
+        for (final name in [
+          'notes.PDF',
+          'more.pdf',
+          'slides.pptx',
+          'README',
+          'data.tar.gz',
+        ])
+          CourseArchiveEntry(
+            url: 'https://ispace.example.edu/pluginfile.php/1/$name',
+            sectionName: 'Week 1',
+            moduleName: 'Lectures',
+            fileName: name,
+            expectedBytes: 3,
+          ),
+      ];
+      final controller = _Controller()
+        ..plan = CoursewareDownloadPlan(files: mixedFiles);
+      final builder = _Builder();
+      await showPicker(
+        tester,
+        controller,
+        builder,
+        size: const Size(390, 844),
+        textScale: 1.5,
+      );
+      expect(find.byType(FilterChip), findsNWidgets(3));
+      expect(find.text('PDF'), findsOneWidget);
+      expect(find.text('GZ'), findsOneWidget);
+      expect(find.text('5 / 5'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      await tester.tap(find.text('PDF'));
+      await tester.pump();
+      expect(find.text('3 / 5'), findsOneWidget);
+      await tester.tap(find.text('PDF'));
+      await tester.pump();
+      expect(find.text('5 / 5'), findsOneWidget);
+
+      // The first checkbox is the existing select-all control.
+      await tester.tap(find.byType(Checkbox).first);
+      await tester.pump();
+      expect(find.text('0 / 5'), findsOneWidget);
+      await tester.tap(find.text('PDF'));
+      await tester.pump();
+      expect(find.text('2 / 5'), findsOneWidget);
+
+      await tester.tap(find.text('notes.PDF'));
+      await tester.pump();
+      expect(
+        tester
+            .widget<FilterChip>(find.widgetWithText(FilterChip, 'PDF'))
+            .selected,
+        isFalse,
+      );
+      await tester.tap(find.text('PDF'));
+      await tester.pump();
+      expect(find.text('2 / 5'), findsOneWidget);
+      await tester.tap(find.text('下载并生成 ZIP'));
+      await tester.pumpAndSettle();
+      expect(builder.entries.map((file) => file.fileName), [
+        'notes.PDF',
+        'more.pdf',
+      ]);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('changed permission blocks previously selected files', (
     tester,
   ) async {
