@@ -484,6 +484,27 @@ class BnbuLocalizations {
   };
 
   static const Map<String, String> _english = <String, String>{
+    '邮件操作': 'Mail actions',
+    '全部已读': 'Mark all read',
+    '向左滑动': 'Swipe left',
+    '向右滑动': 'Swipe right',
+    '已读 / 未读': 'Read / unread',
+    '已读 / 未读和删除': 'Read / unread and delete',
+    '无操作': 'No action',
+    '免提醒邮件': 'Muted mail',
+    '免提醒发件人': 'Muted senders',
+    '发件人免提醒': 'Mute sender',
+    '取消免提醒': 'Unmute sender',
+    '免提醒邮件单独归类，不显示未读圆点。仅保存在本机，不与企业微信同步。':
+        'Muted mail is grouped separately without unread dots. Saved on this device only; not synced with WeCom.',
+    '长按邮件后选择“标记”，或右键邮件，设置发件人免提醒。':
+        'Long-press a message and choose Mark, or right-click it, to mute its sender.',
+    '邮箱设置保存失败，请重试。': 'Could not save mail settings. Please try again.',
+    '将当前文件夹的全部邮件标为已读，包括尚未加载及搜索结果之外的邮件。':
+        'Mark all mail in this folder as read, including unloaded mail and mail outside the search results.',
+    '将当前分组中的全部邮件标为已读。': 'Mark all mail in this group as read.',
+    '部分邮件可能尚未更新，请刷新后重试。':
+        'Some messages may not have been updated. Refresh and try again.',
     '旧副本已隔离保留；本机已有内容继续可用。':
         'Previous copies are preserved in isolation. Existing local content remains available.',
     '逐条确认旧记忆': 'Review each previous memory',

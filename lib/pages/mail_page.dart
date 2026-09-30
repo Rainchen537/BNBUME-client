@@ -30,6 +30,8 @@ import '../services/mail_sender_identity.dart';
 import '../services/mail_service.dart';
 import '../services/mail_presentation.dart';
 import '../services/mail_address_parser.dart';
+import '../services/mail_interaction_preferences.dart';
+import '../services/mail_bulk_actions.dart';
 import '../services/mail_service_factory.dart';
 import '../services/mail_radar_analyzer.dart';
 import '../services/native_actions.dart';
@@ -55,6 +57,7 @@ import '../widgets/rich_mail_editor.dart';
 import '../widgets/small_u_logo.dart';
 
 part 'mail_page_mobile.dart';
+part 'mail_page_interactions.dart';
 part 'mail_detail_header.dart';
 part 'mail_recipient_field.dart';
 part 'mail_compose_page.dart';
@@ -215,6 +218,7 @@ class _MailPageState extends State<MailPage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    MailInteractionPreferences.shared.addListener(_interactionChanged);
     AccountHabits.shared.addListener(_mailHabitsChanged);
     _restoreMailHabits();
     // Inject test credentials if provided
@@ -317,6 +321,7 @@ class _MailPageState extends State<MailPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    MailInteractionPreferences.shared.removeListener(_interactionChanged);
     AccountHabits.shared.removeListener(_mailHabitsChanged);
     final closed = _workspaceComposeClosed;
     if (closed != null && !closed.isCompleted) closed.complete();
@@ -478,8 +483,23 @@ class _MailPageState extends State<MailPage> with WidgetsBindingObserver {
   }
 
   Future<MailAccessCredentials?> _getCredentials() async {
-    if (widget._testCredentials != null) return widget._testCredentials;
-    final creds = await widget.controller?.loadMailAccessCredentials();
+    final controller = widget.controller;
+    final revision = controller?.mailAccess.revision;
+    final creds =
+        widget._testCredentials ??
+        await controller?.loadMailAccessCredentials();
+    if (creds != null) {
+      try {
+        await MailInteractionPreferences.shared.load(creds.userId);
+      } catch (_) {
+        // Local settings failure must not prevent access to the mailbox.
+      }
+    }
+    if (!mounted ||
+        !identical(controller, widget.controller) ||
+        revision != controller?.mailAccess.revision) {
+      return null;
+    }
     _credentials = creds;
     return creds;
   }
@@ -1111,6 +1131,12 @@ class _MailPageState extends State<MailPage> with WidgetsBindingObserver {
     final visible = !_showUnreadOnly
         ? List<MailMessageSummary>.of(filtered)
         : filtered.where((m) => !m.isSeen).toList(growable: true);
+    if (_showMutedGroup) {
+      visible.removeWhere((m) => _interactionSettings.isMuted(m.sender));
+    }
+    if (_collection == MailCollection.muted && !_showRadar) {
+      visible.removeWhere((m) => !_interactionSettings.isMuted(m.sender));
+    }
     if (_showRadar ||
         _collection != MailCollection.folder ||
         _searchResults != null) {
@@ -1407,6 +1433,12 @@ class _MailPageState extends State<MailPage> with WidgetsBindingObserver {
           selected: !_showRadar && _collection == MailCollection.starred,
           onTap: () => _chooseCollection('starred'),
         ),
+        _DesktopMailFolderTile(
+          icon: Icons.notifications_off_outlined,
+          label: '免提醒邮件',
+          selected: !_showRadar && _collection == MailCollection.muted,
+          onTap: () => _chooseCollection('muted'),
+        ),
         for (final folder in const [
           MailFolder.drafts,
           MailFolder.sent,
@@ -1445,12 +1477,13 @@ class _MailPageState extends State<MailPage> with WidgetsBindingObserver {
     final selectedDesktop = _desktopSelectedMessage;
     final isTrash =
         _currentFolder == MailFolder.trash ||
-        selectedDesktop?.folder == MailFolder.trash;
+        (!_isMultiSelectMode && selectedDesktop?.folder == MailFolder.trash);
     return LayoutBuilder(
       builder: (context, constraints) {
         final commandWidth = readingPaneLeft - tokens.space8;
         final labels = [
           '收取',
+          '全部已读',
           '新建邮件',
           isTrash ? '恢复' : '删除',
           '回复',
@@ -1507,6 +1540,19 @@ class _MailPageState extends State<MailPage> with WidgetsBindingObserver {
                             : _openComposePage,
                       ),
                       _DesktopMailCommand(
+                        buttonKey: const ValueKey('mail-desktop-mark-all-read'),
+                        icon: Icons.done_all,
+                        label: '全部已读',
+                        compact: compact,
+                        onPressed:
+                            _credentials == null ||
+                                _isDeleting ||
+                                _mailResultsPending ||
+                                _showRadar
+                            ? null
+                            : _markAllRead,
+                      ),
+                      _DesktopMailCommand(
                         buttonKey: const ValueKey(
                           'mail-desktop-delete-or-restore',
                         ),
@@ -1515,7 +1561,13 @@ class _MailPageState extends State<MailPage> with WidgetsBindingObserver {
                             : LucideIcons.trash2300,
                         label: isTrash ? '恢复' : '删除',
                         compact: compact,
-                        onPressed: selectedDesktop == null
+                        onPressed:
+                            _isDeleting ||
+                                _isSelectingAll ||
+                                _mailResultsPending ||
+                                (_isMultiSelectMode
+                                    ? _selectedMessages.isEmpty
+                                    : selectedDesktop == null)
                             ? null
                             : _performDesktopDeleteOrRestore,
                       ),
@@ -1587,6 +1639,17 @@ class _MailPageState extends State<MailPage> with WidgetsBindingObserver {
   }
 
   Future<void> _performDesktopDeleteOrRestore() async {
+    if (_isDeleting || _isSelectingAll || _mailResultsPending) return;
+    if (_isMultiSelectMode) {
+      final selected = _selectedMessages;
+      if (selected.isEmpty) return;
+      if (selected.every((message) => message.folder == MailFolder.trash)) {
+        await _restoreSelected(messages: selected);
+      } else {
+        await _deleteMailRows(selected);
+      }
+      return;
+    }
     final selected = _desktopSelectedMessage;
     if (selected == null) return;
     if (selected.folder == MailFolder.trash) {
@@ -1810,6 +1873,9 @@ class _MailPageState extends State<MailPage> with WidgetsBindingObserver {
     final radarError = _showRadar ? _radarController?.error : null;
     return Column(
       children: [
+        if (_isMultiSelectMode)
+          _mobileSelectionHeader(MailSurfaceColors(context)),
+        if (_showMutedGroup) _mutedGroupTile(),
         BnbuUpdateProgress(
           active:
               visible.isNotEmpty &&
@@ -1849,6 +1915,7 @@ class _MailPageState extends State<MailPage> with WidgetsBindingObserver {
                               ? '当前没有未读邮件。'
                               : '该文件夹没有邮件。',
                         ),
+                      if (hasMore) _buildLoadMoreFooter(),
                     ],
                   )
                 : ListView.builder(
@@ -1864,21 +1931,55 @@ class _MailPageState extends State<MailPage> with WidgetsBindingObserver {
                       final radarItem = _showRadar
                           ? _radarItemFor(message)
                           : null;
-                      return _DesktopMailRow(
-                        message: message,
-                        radarItem: radarItem,
-                        senderAvatarService: _senderAvatarService,
-                        timeLabel: _formatMessageTime(message.date),
-                        active:
-                            _desktopSelectedMessage?.identityKey ==
-                            message.identityKey,
-                        opening: _openingMessageUid == message.uid,
-                        onTap: () => _selectDesktopMessage(message),
+                      return GestureDetector(
+                        onSecondaryTapDown: (event) =>
+                            _showMailContextMenu(message, event.globalPosition),
+                        child: Row(
+                          children: [
+                            if (_isMultiSelectMode)
+                              Checkbox(
+                                value: _selectedUids.contains(
+                                  message.identityKey,
+                                ),
+                                onChanged: _isDeleting || _isSelectingAll
+                                    ? null
+                                    : (_) => _toggleSelectMessage(
+                                        message.identityKey,
+                                      ),
+                              ),
+                            Expanded(
+                              child: _DesktopMailRow(
+                                message: message,
+                                muted: _interactionSettings.isMuted(
+                                  message.sender,
+                                ),
+                                radarItem: radarItem,
+                                senderAvatarService: _senderAvatarService,
+                                timeLabel: _formatMessageTime(message.date),
+                                active: _isMultiSelectMode
+                                    ? _selectedUids.contains(
+                                        message.identityKey,
+                                      )
+                                    : _desktopSelectedMessage?.identityKey ==
+                                          message.identityKey,
+                                opening:
+                                    _isDeleting ||
+                                    _isSelectingAll ||
+                                    _openingMessageUid == message.uid,
+                                onTap: () => _isMultiSelectMode
+                                    ? _toggleSelectMessage(message.identityKey)
+                                    : _selectDesktopMessage(message),
+                              ),
+                            ),
+                          ],
+                        ),
                       );
                     },
                   ),
           ),
         ),
+        if (_isMultiSelectMode)
+          _mobileSelectionFooter(MailSurfaceColors(context)),
       ],
     );
   }
@@ -2218,7 +2319,11 @@ class _MailPageState extends State<MailPage> with WidgetsBindingObserver {
             subjectColor: item.priority == MailRadarPriority.urgent
                 ? const Color(0xFFEC6868)
                 : null,
-            swipeActions: _mailRowActions(message, radar: true),
+            swipeActions: _configuredRowActions(message, left: true),
+            rightSwipeActions: _configuredRowActions(message, left: false),
+            muted: _interactionSettings.isMuted(message.sender),
+            onSecondaryTapDown: (event) =>
+                _showMailContextMenu(message, event.globalPosition),
             onTap: () {
               if (!desktop && _isMultiSelectMode) {
                 _toggleSelectMessage(message.identityKey);
@@ -2397,20 +2502,20 @@ class _MailPageState extends State<MailPage> with WidgetsBindingObserver {
   }
 
   // Equal-width 3-section toolbar: [folder▼] | [未读] | [多选]
-  Future<void> _restoreSelected() async {
+  Future<void> _restoreSelected({List<MailMessageSummary>? messages}) async {
     final snapshot = _snapshot;
-    if (_selectedUids.isEmpty ||
+    final rows = messages ?? _selectedMessages;
+    if (rows.isEmpty ||
         snapshot == null ||
         snapshot.folder != MailFolder.trash) {
       return;
     }
     final credentials = await _getCredentials();
     if (credentials == null || !mounted) return;
+    final generation = _folderRequestGeneration;
 
     final mailboxUidValidity = snapshot.mailboxUidValidity;
-    final uids = _selectedMessages
-        .map((message) => message.uid)
-        .toList(growable: false);
+    final uids = rows.map((message) => message.uid).toList(growable: false);
     final tokens = context.bnbuTheme;
     final confirmed = await showDialog<bool>(
       context: context,
@@ -2433,6 +2538,8 @@ class _MailPageState extends State<MailPage> with WidgetsBindingObserver {
     if (confirmed != true ||
         !mounted ||
         _currentFolder != MailFolder.trash ||
+        !identical(credentials, _credentials) ||
+        generation != _folderRequestGeneration ||
         _snapshot?.mailboxUidValidity != mailboxUidValidity) {
       return;
     }
@@ -2837,7 +2944,7 @@ class _DesktopMailCommand extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = context.bnbuTheme;
     return SizedBox(
-      width: compact ? 44 : null,
+      width: compact ? 38 : null,
       child: Tooltip(
         message: context.l10n.text(label),
         child: TextButton.icon(
@@ -3214,9 +3321,11 @@ class _DesktopMailRow extends StatelessWidget {
     required this.active,
     required this.opening,
     required this.onTap,
+    this.muted = false,
   });
 
   final MailMessageSummary message;
+  final bool muted;
   final MailRadarItem? radarItem;
   final MailSenderAvatarService senderAvatarService;
   final String timeLabel;
@@ -3227,7 +3336,7 @@ class _DesktopMailRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = context.bnbuTheme;
-    final unread = !message.isSeen;
+    final unread = !message.isSeen && !muted;
     final primary = active ? Colors.white : tokens.textPrimary;
     final secondary = active
         ? Colors.white.withValues(alpha: .78)
@@ -3327,6 +3436,14 @@ class _DesktopMailRow extends StatelessWidget {
                                 ),
                           ),
                         ),
+                        if (message.isFlagged) ...[
+                          const SizedBox(width: 5),
+                          Icon(
+                            Icons.star,
+                            size: 14,
+                            color: active ? primary : tokens.brandBlue,
+                          ),
+                        ],
                         if (message.hasAttachments) ...[
                           const SizedBox(width: 5),
                           Icon(

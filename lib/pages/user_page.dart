@@ -37,6 +37,7 @@ import '../state/app_theme_mode_controller.dart';
 import '../state/live_activity_preference_controller.dart';
 import '../state/mail_radar_background_coordinator.dart';
 import '../state/mail_radar_controller.dart';
+import '../widgets/mail_interaction_settings.dart';
 import '../services/mail_radar_analyzer.dart';
 import '../state/student_avatar_controller.dart';
 import '../theme/app_theme.dart';
@@ -458,7 +459,8 @@ class _UserPageState extends State<UserPage> {
             ),
         ];
         final overviewEntries = <Widget>[
-          if (widget.mailRadarCoordinator != null ||
+          if (controller.username != null ||
+              widget.mailRadarCoordinator != null ||
               DesktopDownloadService.supported)
             _ActionTile(
               key: const ValueKey('general-settings-entry'),
@@ -466,6 +468,8 @@ class _UserPageState extends State<UserPage> {
               onTap: () => _openSettingsPage(
                 title: '通用设置',
                 children: [
+                  if (controller.username != null)
+                    MailInteractionSettingsPanel(owner: controller.username!),
                   if (widget.mailRadarCoordinator != null)
                     _MailRadarSettings(
                       coordinator: widget.mailRadarCoordinator!,

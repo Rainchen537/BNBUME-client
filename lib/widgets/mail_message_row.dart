@@ -80,6 +80,9 @@ class MailMessageRow extends StatefulWidget {
     this.tags = const [],
     this.subjectColor,
     this.swipeActions = const [],
+    this.rightSwipeActions = const [],
+    this.onSecondaryTapDown,
+    this.muted = false,
     this.openSwipe,
     this.threadCount = 1,
   });
@@ -94,6 +97,9 @@ class MailMessageRow extends StatefulWidget {
   final List<MailRowTag> tags;
   final Color? subjectColor;
   final List<MailSwipeAction> swipeActions;
+  final List<MailSwipeAction> rightSwipeActions;
+  final GestureTapDownCallback? onSecondaryTapDown;
+  final bool muted;
   final ValueNotifier<String?>? openSwipe;
   final int threadCount;
   @override
@@ -103,7 +109,11 @@ class MailMessageRow extends StatefulWidget {
 class _MailMessageRowState extends State<MailMessageRow> {
   double _offset = 0;
   bool _dragging = false;
-  double get _actionExtent => widget.swipeActions.length * 72.0;
+  double get _leftExtent => widget.swipeActions.length * 72.0;
+  double get _rightExtent => widget.rightSwipeActions.length * 72.0;
+  List<MailSwipeAction> get _shownActions =>
+      _offset > 0 ? widget.rightSwipeActions : widget.swipeActions;
+  double get _actionExtent => _shownActions.length * 72.0;
   @override
   void initState() {
     super.initState();
@@ -118,6 +128,9 @@ class _MailMessageRowState extends State<MailMessageRow> {
       widget.openSwipe?.addListener(_handleOpenRow);
     }
     if (widget.selectionMode ||
+        widget.busy ||
+        widget.swipeActions.length != oldWidget.swipeActions.length ||
+        widget.rightSwipeActions.length != oldWidget.rightSwipeActions.length ||
         widget.message.identityKey != oldWidget.message.identityKey) {
       _offset = 0;
     }
@@ -190,7 +203,9 @@ class _MailMessageRowState extends State<MailMessageRow> {
     final message = widget.message;
     final preview = message.readablePreview;
     final canSwipe =
-        !widget.selectionMode && !widget.busy && widget.swipeActions.isNotEmpty;
+        !widget.selectionMode &&
+        !widget.busy &&
+        (widget.swipeActions.isNotEmpty || widget.rightSwipeActions.isNotEmpty);
     final separatorInset = widget.selectionMode ? 104.0 : 64.0;
     final row = Material(
       color: colors.background,
@@ -205,6 +220,7 @@ class _MailMessageRowState extends State<MailMessageRow> {
                 }
               },
         onLongPress: widget.busy ? null : widget.onLongPress,
+        onSecondaryTapDown: widget.busy ? null : widget.onSecondaryTapDown,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
           child: Row(
@@ -235,7 +251,7 @@ class _MailMessageRowState extends State<MailMessageRow> {
                       diameter: 40,
                       senderAvatarService: widget.avatarService,
                     ),
-                    if (!message.isSeen)
+                    if (!message.isSeen && !widget.muted)
                       Positioned(
                         top: -2,
                         right: -2,
@@ -366,13 +382,15 @@ class _MailMessageRowState extends State<MailMessageRow> {
                 if (_offset != 0)
                   Positioned.fill(
                     child: Align(
-                      alignment: Alignment.centerRight,
+                      alignment: _offset > 0
+                          ? Alignment.centerLeft
+                          : Alignment.centerRight,
                       child: SizedBox(
                         width: _actionExtent,
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            for (final action in widget.swipeActions)
+                            for (final action in _shownActions)
                               Expanded(
                                 child: Material(
                                   color: action.color,
@@ -423,8 +441,8 @@ class _MailMessageRowState extends State<MailMessageRow> {
                   onHorizontalDragUpdate: canSwipe
                       ? (event) => setState(() {
                           _offset = (_offset + event.delta.dx).clamp(
-                            -_actionExtent,
-                            0,
+                            -_leftExtent,
+                            _rightExtent,
                           );
                         })
                       : null,
@@ -432,11 +450,17 @@ class _MailMessageRowState extends State<MailMessageRow> {
                       ? (event) => setState(() {
                           _dragging = false;
                           final velocity = event.primaryVelocity ?? 0;
-                          _offset =
-                              velocity < -250 ||
-                                  velocity < 250 && _offset < -_actionExtent / 3
-                              ? -_actionExtent
-                              : 0;
+                          if (velocity < -250) {
+                            _offset = -_leftExtent;
+                          } else if (velocity > 250) {
+                            _offset = _rightExtent;
+                          } else if (_offset < -_leftExtent / 3) {
+                            _offset = -_leftExtent;
+                          } else if (_offset > _rightExtent / 3) {
+                            _offset = _rightExtent;
+                          } else {
+                            _offset = 0;
+                          }
                         })
                       : null,
                   onHorizontalDragCancel: canSwipe

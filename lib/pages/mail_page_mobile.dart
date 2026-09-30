@@ -178,6 +178,7 @@ extension _MobileMailPage on _MailPageState {
       _searchResults = null;
       _collection = switch (value) {
         'starred' => MailCollection.starred,
+        'muted' => MailCollection.muted,
         _ => MailCollection.folder,
       };
       if (_collection == MailCollection.folder) {
@@ -203,7 +204,9 @@ extension _MobileMailPage on _MailPageState {
       _errorMessage = null;
     });
     try {
-      final folders = [MailFolder.inbox, MailFolder.sent, MailFolder.drafts];
+      final folders = collection == MailCollection.muted
+          ? [MailFolder.inbox]
+          : [MailFolder.inbox, MailFolder.sent, MailFolder.drafts];
       for (final folder in folders) {
         int? validity;
         for (var page = 1; ; page++) {
@@ -230,7 +233,10 @@ extension _MobileMailPage on _MailPageState {
             _collectionMessages.addAll(
               snapshot.messages.where(
                 (message) =>
-                    collection != MailCollection.starred || message.isFlagged,
+                    (collection != MailCollection.starred ||
+                        message.isFlagged) &&
+                    (collection != MailCollection.muted ||
+                        _interactionSettings.isMuted(message.sender)),
               ),
             );
             _collectionMessages.sort(
@@ -410,6 +416,8 @@ extension _MobileMailPage on _MailPageState {
 
   Future<void> _deleteMailRows(List<MailMessageSummary> messages) async {
     if (messages.isEmpty) return;
+    final credentials = _credentials;
+    final generation = _folderRequestGeneration;
     final permanent = messages.any(
       (message) => message.folder == MailFolder.trash,
     );
@@ -434,9 +442,13 @@ extension _MobileMailPage on _MailPageState {
         ],
       ),
     );
-    if (confirmed != true || !mounted) return;
+    if (confirmed != true ||
+        !mounted ||
+        !identical(credentials, _credentials) ||
+        generation != _folderRequestGeneration) {
+      return;
+    }
     await _runMailMutation(() async {
-      final credentials = _credentials;
       if (credentials == null) return;
       final groups = <(MailFolder, int?), List<MailMessageSummary>>{};
       for (final message in messages) {
@@ -445,6 +457,7 @@ extension _MobileMailPage on _MailPageState {
             .add(message);
       }
       for (final group in groups.values) {
+        if (!mounted || !identical(credentials, _credentials)) return;
         final message = group.first;
         await _mailService.deleteMessages(
           credentials: credentials,
@@ -461,6 +474,8 @@ extension _MobileMailPage on _MailPageState {
   }
 
   Future<void> _moveMailRows(List<MailMessageSummary> messages) async {
+    final credentials = _credentials;
+    final generation = _folderRequestGeneration;
     final choice = await showBnbuAdaptiveModal<String>(
       context: context,
       dialogMaxWidth: 420,
@@ -487,9 +502,14 @@ extension _MobileMailPage on _MailPageState {
         ),
       ),
     );
-    if (choice == null || !mounted) return;
+    if (choice == null ||
+        !mounted ||
+        !identical(credentials, _credentials) ||
+        generation != _folderRequestGeneration) {
+      return;
+    }
     if (choice == 'restore') {
-      await _restoreSelected();
+      await _restoreSelected(messages: messages);
       return;
     }
     final target = MailFolder.values.byName(choice);
@@ -525,31 +545,6 @@ extension _MobileMailPage on _MailPageState {
     });
   }
 
-  List<MailSwipeAction> _mailRowActions(
-    MailMessageSummary message, {
-    bool radar = false,
-  }) => [
-    MailSwipeAction(
-      label: message.isSeen ? '标为未读' : '标为已读',
-      icon: message.isSeen ? LucideIcons.mail300 : LucideIcons.mailOpen300,
-      color: const Color(0xFF3788E7),
-      onPressed: () => _setMailRead([message], !message.isSeen),
-    ),
-    if (_radarEffectivelyEnabled)
-      MailSwipeAction(
-        label: radar ? '标记完成' : '加入雷达',
-        icon: LucideIcons.radar300,
-        color: const Color(0xFF6D727B),
-        onPressed: () => _toggleRadarMembership([message], !radar),
-      ),
-    MailSwipeAction(
-      label: '删除',
-      icon: LucideIcons.trash2300,
-      color: const Color(0xFFD85050),
-      onPressed: () => _deleteMailRows([message]),
-    ),
-  ];
-
   Widget _buildMobileMailbox(BuildContext context) => AnimatedBuilder(
     animation: _radarController ?? _openSwipe,
     builder: (context, _) {
@@ -570,6 +565,7 @@ extension _MobileMailPage on _MailPageState {
                 else ...[
                   _mobileSearchHeader(colors),
                   _mobileFolderToolbar(colors),
+                  if (_showMutedGroup) _mutedGroupTile(),
                   if (_showScopeArea &&
                       !_showRadar &&
                       _collection == MailCollection.folder)
@@ -627,6 +623,18 @@ extension _MobileMailPage on _MailPageState {
         child: Row(
           children: [
             Expanded(flex: 12, child: _mobileFolderMenu(colors)),
+            IconButton(
+              key: const ValueKey('mail-mark-all-read'),
+              tooltip: context.l10n.text('全部已读'),
+              icon: const Icon(Icons.done_all, size: 19),
+              onPressed:
+                  _credentials == null ||
+                      _isDeleting ||
+                      _mailResultsPending ||
+                      _showRadar
+                  ? null
+                  : _markAllRead,
+            ),
             _mobileToolDivider(colors),
             Expanded(
               flex: 9,
@@ -730,11 +738,13 @@ extension _MobileMailPage on _MailPageState {
         : _collection.name;
     final label = switch (_collection) {
       MailCollection.starred => '星标邮件',
+      MailCollection.muted => '免提醒邮件',
       MailCollection.folder => _MailPageState._folderLabel(_currentFolder),
       _ => _MailPageState._folderLabel(MailFolder.inbox),
     };
     final icon = switch (_collection) {
       MailCollection.starred => LucideIcons.star300,
+      MailCollection.muted => Icons.notifications_off_outlined,
       MailCollection.folder => _MailPageState._folderIcon(_currentFolder),
       _ => LucideIcons.inbox300,
     };
@@ -747,6 +757,7 @@ extension _MobileMailPage on _MailPageState {
     final entries = <(String, String, IconData)>[
       ('inbox', '收件箱', LucideIcons.inbox300),
       ('starred', '星标邮件', LucideIcons.star300),
+      ('muted', '免提醒邮件', Icons.notifications_off_outlined),
       ('drafts', '草稿箱', LucideIcons.stickyNote300),
       ('sent', '已发送', LucideIcons.send300),
       ('trash', '已删除', LucideIcons.trash2300),
@@ -922,8 +933,11 @@ extension _MobileMailPage on _MailPageState {
           controller: _scrollController,
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.only(bottom: 24),
-          itemCount: visible.isEmpty ? 1 : visible.length + (hasMore ? 1 : 0),
+          itemCount: visible.isEmpty
+              ? 1 + (hasMore ? 1 : 0)
+              : visible.length + (hasMore ? 1 : 0),
           itemBuilder: (context, index) {
+            if (visible.isEmpty && index == 1) return _buildLoadMoreFooter();
             if (visible.isEmpty) {
               return Padding(
                 key: const ValueKey('mail-refreshable-state'),
@@ -960,7 +974,11 @@ extension _MobileMailPage on _MailPageState {
               selected: _selectedUids.contains(message.identityKey),
               busy: _isDeleting || _isSelectingAll,
               openSwipe: _openSwipe,
-              swipeActions: _mailRowActions(message),
+              swipeActions: _configuredRowActions(message, left: true),
+              rightSwipeActions: _configuredRowActions(message, left: false),
+              muted: _interactionSettings.isMuted(message.sender),
+              onSecondaryTapDown: (event) =>
+                  _showMailContextMenu(message, event.globalPosition),
               onTap: () {
                 if (_isMultiSelectMode) {
                   _toggleSelectMessage(message.identityKey);
@@ -1080,6 +1098,10 @@ extension _MobileMailPage on _MailPageState {
                         _setMailStarred(selected, false);
                       case 'radar':
                         _toggleRadarMembership(selected, !_showRadar);
+                      case 'mute':
+                        _setSendersMuted(selected, true);
+                      case 'unmute':
+                        _setSendersMuted(selected, false);
                     }
                   },
                   itemBuilder: (context) => [
@@ -1089,6 +1111,14 @@ extension _MobileMailPage on _MailPageState {
                       child: BnbuText('标为未读'),
                     ),
                     const PopupMenuItem(value: 'star', child: BnbuText('添加星标')),
+                    const PopupMenuItem(
+                      value: 'mute',
+                      child: BnbuText('发件人免提醒'),
+                    ),
+                    const PopupMenuItem(
+                      value: 'unmute',
+                      child: BnbuText('取消免提醒'),
+                    ),
                     const PopupMenuItem(
                       value: 'unstar',
                       child: BnbuText('取消星标'),

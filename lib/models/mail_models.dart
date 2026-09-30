@@ -29,7 +29,7 @@ class MailAccessCredentials {
 enum MailFolder { inbox, sent, drafts, trash, junk }
 
 /// Virtual views never replace a message's actual mailbox identity.
-enum MailCollection { folder, topics, starred }
+enum MailCollection { folder, topics, starred, muted }
 
 class MailFolderInfo {
   const MailFolderInfo({
